@@ -61,7 +61,13 @@ serve(async (req) => {
             .single();
 
         if (cachedInsight) {
-            return new Response(JSON.stringify({ insight: cachedInsight.output_text, cached: true }), {
+            let parsedCache;
+            try {
+                parsedCache = JSON.parse(cachedInsight.output_text);
+            } catch {
+                parsedCache = { insight: cachedInsight.output_text };
+            }
+            return new Response(JSON.stringify({ ...parsedCache, cached: true }), {
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             });
         }
@@ -73,16 +79,39 @@ serve(async (req) => {
         }
 
         // Construct Prompt
-        const systemPrompt = `You are Kira, a travel mentor for Unfold India. Your goal is to encourage users to explore more of India. Keep responses short (max 2 sentences), professional, and inspiring.`;
+        const systemPrompt = `You are Kira, an elite travel AI for Unfold India. 
+        Your goal is to analyze the user's travel profile and generate a personalized, structured insight.
+        
+        **INPUT DATA:**
+        - India Explored %
+        - Travel Styles (e.g., Adventure, Luxury)
+        - Unlocked Badges
+        - Unexplored Regions
+
+        **OUTPUT FORMAT:**
+        You must return a valid JSON object with these keys:
+        {
+            "insight": "A 2-sentence personalized message. Reference their specific travel style or recent badges.",
+            "focus_area": "A specific region or city to target next (e.g., 'South India' or 'Rishikesh').",
+            "next_milestone": "The next logical badge or goal (e.g., 'Unlock Explorer Badge').",
+            "action_tip": "A short, punchy action (e.g., 'Plan a trip to Kerala')."
+        }
+
+        **TONE:**
+        - Professional yet encouraging.
+        - If they like 'Adventure', suggest thrilling spots.
+        - If they like 'Luxury', suggest royal/comfort spots.
+        - Mention their badges to gamify the experience.
+        `;
 
         const userPrompt = `
         User Stats:
         - India Explored: ${india_progress}%
-        - Top Styles: ${top_travel_styles.join(', ')}
-        - Unlocked Badges: ${unlocked_badges.join(', ')}
+        - Travel Styles: ${top_travel_styles.join(', ') || 'General'}
+        - Unlocked Badges: ${unlocked_badges.join(', ') || 'None'}
         - Unexplored Regions: ${unexplored_regions.join(', ')}
         
-        Generate a short insight about their progress.`;
+        Generate the JSON insight.`;
 
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
@@ -97,7 +126,8 @@ serve(async (req) => {
                     { role: 'user', content: userPrompt }
                 ],
                 temperature: 0.7,
-                max_tokens: 100,
+                max_tokens: 200,
+                response_format: { type: "json_object" }
             }),
         });
 
@@ -108,19 +138,34 @@ serve(async (req) => {
             throw new Error(aiData.error?.message || 'Failed to fetch insight from Groq');
         }
 
-        const aiResponse = aiData.choices[0]?.message?.content || "Keep exploring to unlock more insights!";
+        const rawContent = aiData.choices[0]?.message?.content;
+        let parsedContent;
+        try {
+            parsedContent = JSON.parse(rawContent);
+        } catch (e) {
+            console.error("Failed to parse AI JSON:", rawContent);
+            // Fallback
+            parsedContent = {
+                insight: rawContent || "Keep exploring to unlock more insights!",
+                focus_area: "India",
+                next_milestone: "Explorer Badge",
+                action_tip: "Explore more cities"
+            };
+        }
 
-        // 4. Save to Cache
+        // 4. Save to Cache (Store the full JSON object as text)
         await supabaseClient.from('user_progress_insights').insert({
             user_id: user.id,
             insight_type,
             input_hash: inputHash,
-            output_text: aiResponse
+            output_text: JSON.stringify(parsedContent)
         });
 
-        return new Response(JSON.stringify({ insight: aiResponse, cached: false }), {
+        return new Response(JSON.stringify({ ...parsedContent, cached: false }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
+
+
 
     } catch (error) {
         return new Response(JSON.stringify({ error: error.message }), {
