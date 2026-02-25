@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import chat
+from app.routers import chat, route
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -18,6 +18,7 @@ app.add_middleware(
 
 # Include Routers
 app.include_router(chat.router, prefix="/api", tags=["Chat"])
+app.include_router(route.router, prefix="/api", tags=["Route"])
 
 @app.get("/")
 def read_root():
